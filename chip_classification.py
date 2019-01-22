@@ -1,12 +1,13 @@
 import os
 
 import rastervision as rv
+from rastervision.filesystem import FileSystem
+
 
 
 def build_scene(task, data_uri, id, channel_order=None):
     id = id.replace('-', '_')
     raster_source_uri = '{}/isprs-potsdam/4_Ortho_RGBIR/top_potsdam_{}_RGBIR.tif'.format(data_uri, id)
-    #os.path.isfile("
     label_source_uri = '{}/labels/all/top_potsdam_{}_RGBIR.json'.format(data_uri, id)
 
     # Using with_rgb_class_map because input TIFFs have classes encoded as RGB colors.
@@ -19,7 +20,6 @@ def build_scene(task, data_uri, id, channel_order=None):
                  .with_infer_cells(True) \
                  .build()
     # URI will be injected by scene config.
-    # Using with_rgb(True) because we want prediction TIFFs to be in RGB format.
     scene = rv.SceneConfig.builder() \
                           .with_task(task) \
                           .with_id(id) \
@@ -29,6 +29,22 @@ def build_scene(task, data_uri, id, channel_order=None):
                           .build()
 
     return scene
+
+def build_predict_scene(task, image_uri, channel_order=None):
+    raster_source_uri = image_uri
+
+    scene_id = os.path.basename(raster_source_uri)
+
+    # URI will be injected by scene config.
+    scene = rv.SceneConfig.builder() \
+                          .with_task(task) \
+                          .with_id(scene_id) \
+                          .with_raster_source(raster_source_uri,
+                                              channel_order=channel_order) \
+                          .build()
+
+    return scene
+
 
 
 class PotsdamChipClassification(rv.ExperimentSet):
@@ -125,6 +141,32 @@ class PotsdamChipClassification(rv.ExperimentSet):
                                         .with_backend(backend) \
                                         .with_dataset(dataset) \
                                         .with_root_uri(root_uri) \
+                                        .build()
+
+        return experiment
+
+    def exp_predict(self, root_uri, data_uri, target_uri, predict_key, test_run=False):
+        e = self.exp_main(root_uri, data_uri, test_run)
+
+        fs = FileSystem.get_file_system(target_uri)
+        test_scenes = list(map(lambda x: build_predict_scene(e.task, x),
+                               fs.list_paths(target_uri, '.tif')))
+
+        # Because of bug in RV (#663), we need to hold onto at least one training and validation scene.
+        dataset = e.dataset.to_builder() \
+                           .with_train_scene(e.dataset.train_scenes[0]) \
+                           .with_validation_scene(e.dataset.validation_scenes[0]) \
+                           .with_test_scenes(test_scenes) \
+                           .build()
+
+        exp_id = '{}-predict-{}'.format(e.id, predict_key)
+
+        experiment = rv.ExperimentConfig.builder() \
+                                        .with_id(exp_id) \
+                                        .with_task(e.task) \
+                                        .with_backend(e.backend) \
+                                        .with_dataset(dataset) \
+                                        .with_root_uri(e.root_uri) \
                                         .build()
 
         return experiment
